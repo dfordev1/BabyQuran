@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import Papa from 'papaparse';
 import { createClient } from '@supabase/supabase-js';
-import { Play, Pause, Upload, Volume2, Edit2, Check, X, Presentation, Timer, ChevronLeft, ChevronRight, Sparkles, Cloud, BookHeart } from 'lucide-react';
+import { Play, Pause, Upload, Edit2, Check, X, Presentation, Timer, ChevronLeft, ChevronRight, Sparkles, Cloud, BookHeart } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 const supabaseUrl = 'https://woylhshulcoidlacxqcc.supabase.co';
@@ -37,8 +37,6 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
 
   const [selectedChapter, setSelectedChapter] = useState<number | null>(null);
-  const [playingVerse, setPlayingVerse] = useState<number | null>(null);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
 
   // Flashcard state
   const [isFlashcardMode, setIsFlashcardMode] = useState(false);
@@ -189,45 +187,6 @@ export default function App() {
     }
   };
 
-  const playAudio = (chapter: number, verse: number) => {
-    if (audioRef.current) {
-      audioRef.current.pause();
-    }
-    
-    const formattedChapter = chapter.toString().padStart(3, '0');
-    const formattedVerse = verse.toString().padStart(3, '0');
-    const audioUrl = `https://everyayah.com/data/Alafasy_128kbps/${formattedChapter}${formattedVerse}.mp3`;
-    
-    const audio = new Audio(audioUrl);
-    audioRef.current = audio;
-    
-    audio.onplay = () => setPlayingVerse(verse);
-    audio.onended = () => {
-      setPlayingVerse(null);
-      const chapterLessons = lessons.filter(l => l.chapter_no === chapter).sort((a,b) => a.verse_no - b.verse_no);
-      const currentIndex = chapterLessons.findIndex(l => l.verse_no === verse);
-      if (currentIndex !== -1 && currentIndex < chapterLessons.length - 1) {
-        playAudio(chapter, chapterLessons[currentIndex + 1].verse_no);
-      }
-    };
-    audio.onerror = () => {
-      console.error("Audio failed to load:", audioUrl);
-      setPlayingVerse(null);
-    };
-    
-    audio.play().catch(err => {
-      console.error("Playback prevented:", err);
-      setPlayingVerse(null);
-    });
-  };
-
-  const stopAudio = () => {
-    if (audioRef.current) {
-      audioRef.current.pause();
-      setPlayingVerse(null);
-    }
-  };
-
   useEffect(() => {
     let timer: NodeJS.Timeout;
     if (isFlashcardMode && isFlashcardPlaying && selectedChapter) {
@@ -259,6 +218,17 @@ export default function App() {
 
   return (
     <div className="min-h-screen flex flex-col md:flex-row p-4 md:p-8 gap-8 max-w-[1600px] mx-auto">
+      {/* Floating Upload Button */}
+      <label className="fixed top-4 right-4 md:top-8 md:right-8 z-50 cursor-pointer bg-white hover:bg-sky-50 text-slate-700 hover:text-sky-600 shadow-[0_8px_30px_rgb(0,0,0,0.12)] hover:shadow-[0_8px_30px_rgb(14,165,233,0.2)] border border-slate-100 transition-all duration-300 rounded-full py-3 px-5 flex items-center justify-center gap-2 font-semibold group">
+        <input type="file" accept=".csv" onChange={handleFileUpload} className="hidden" disabled={uploading} />
+        {uploading ? (
+          <div className="w-5 h-5 border-2 border-sky-500 border-t-transparent rounded-full animate-spin" />
+        ) : (
+          <Upload size={20} className="group-hover:-translate-y-0.5 transition-transform" />
+        )}
+        <span className="hidden sm:inline">{uploading ? 'Uploading...' : 'Upload CSV'}</span>
+      </label>
+
       {/* Sidebar */}
       <motion.aside 
         initial={{ opacity: 0, x: -20 }}
@@ -273,12 +243,6 @@ export default function App() {
           </div>
           <h1 className="text-3xl font-bold text-slate-800 tracking-tight">Baby Quran</h1>
           <p className="text-slate-500 font-medium mt-2">Gentle lessons for little hearts</p>
-          
-          <label className="mt-8 w-full cursor-pointer bg-slate-50 hover:bg-sky-50 text-slate-600 hover:text-sky-600 border-2 border-dashed border-slate-200 hover:border-sky-200 transition-all duration-300 rounded-2xl p-4 flex flex-col items-center justify-center gap-2 font-semibold group">
-            <input type="file" accept=".csv" onChange={handleFileUpload} className="hidden" disabled={uploading} />
-            <Upload size={24} className="group-hover:-translate-y-1 transition-transform" />
-            <span>{uploading ? 'Uploading...' : 'Upload CSV'}</span>
-          </label>
           {error && <p className="text-red-500 text-sm mt-4 bg-red-50 p-3 rounded-xl w-full">{error}</p>}
         </div>
 
@@ -351,22 +315,12 @@ export default function App() {
                   <Presentation size={20} strokeWidth={2.5} />
                   <span>Flashcards</span>
                 </button>
-                <button 
-                  onClick={() => {
-                    const firstVerse = chapterLessons[0]?.verse_no;
-                    if (firstVerse) playAudio(selectedChapter, firstVerse);
-                  }}
-                  className="bg-sky-500 text-white px-6 py-3 rounded-full font-bold flex items-center gap-2 shadow-md shadow-sky-200 hover:bg-sky-600 hover:shadow-lg hover:-translate-y-0.5 transition-all"
-                >
-                  <Play size={20} strokeWidth={2.5} /> 
-                  <span>Autoplay</span>
-                </button>
               </div>
             </div>
 
             {/* Content */}
             {isFlashcardMode && chapterLessons.length > 0 ? (
-              <div className="flex-1 flex flex-col items-center justify-center max-w-5xl mx-auto w-full">
+              <div className="flex-1 flex flex-col items-center justify-start pt-4 md:pt-8 max-w-5xl mx-auto w-full">
                 <AnimatePresence mode="wait">
                   <motion.div 
                     key={flashcardIndex}
@@ -374,7 +328,7 @@ export default function App() {
                     animate={{ opacity: 1, scale: 1, y: 0 }}
                     exit={{ opacity: 0, scale: 1.05, y: -20 }}
                     transition={{ duration: 0.4, type: "spring", bounce: 0.4 }}
-                    className="w-full aspect-[4/3] md:aspect-[16/9] bg-white rounded-[3rem] shadow-[0_20px_60px_rgb(0,0,0,0.06)] border border-[#F0EBE1] flex flex-col items-center justify-center p-8 md:p-16 text-center relative overflow-hidden group"
+                    className="w-full min-h-[300px] md:min-h-[400px] h-auto bg-white rounded-[3rem] shadow-[0_20px_60px_rgb(0,0,0,0.06)] border border-[#F0EBE1] flex flex-col items-center justify-center p-8 md:p-16 text-center relative overflow-hidden group"
                   >
                     {/* Decorative background elements */}
                     <div className="absolute top-0 left-0 w-full h-full overflow-hidden pointer-events-none opacity-40 transition-opacity group-hover:opacity-60">
@@ -441,7 +395,6 @@ export default function App() {
             ) : (
               <div className="grid grid-cols-1 gap-6 pb-12">
                 {chapterLessons.map((lesson, idx) => {
-                  const isPlaying = playingVerse === lesson.verse_no;
                   const isEditing = editingVerseKey === `${lesson.chapter_no}-${lesson.verse_no}`;
 
                   return (
@@ -450,14 +403,10 @@ export default function App() {
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: Math.min(idx * 0.05, 0.5) }}
                       key={lesson.verse_no} 
-                      className={`bg-white rounded-[2rem] p-6 md:p-8 shadow-[0_4px_20px_rgb(0,0,0,0.03)] border transition-all duration-300 ${
-                        isPlaying ? 'border-sky-300 shadow-sky-100 scale-[1.01]' : 'border-[#F0EBE1] hover:border-sky-200 hover:shadow-md'
-                      }`}
+                      className="bg-white rounded-[2rem] p-6 md:p-8 shadow-[0_4px_20px_rgb(0,0,0,0.03)] border border-[#F0EBE1] hover:border-sky-200 hover:shadow-md transition-all duration-300"
                     >
                       <div className="flex justify-between items-start mb-6 gap-4">
-                        <div className={`px-5 py-2 rounded-full text-sm font-bold shadow-sm ${
-                          isPlaying ? 'bg-sky-500 text-white' : 'bg-sky-50 text-sky-600'
-                        }`}>
+                        <div className="px-5 py-2 rounded-full text-sm font-bold shadow-sm bg-sky-50 text-sky-600">
                           Verse {lesson.verse_no}
                         </div>
                         <div className="flex items-center gap-2">
@@ -473,16 +422,6 @@ export default function App() {
                               <Edit2 size={20} strokeWidth={2.5} />
                             </button>
                           )}
-                          <button 
-                            onClick={() => isPlaying ? stopAudio() : playAudio(lesson.chapter_no, lesson.verse_no)}
-                            className={`p-3 rounded-full transition-all ${
-                              isPlaying 
-                                ? 'bg-sky-100 text-sky-600 shadow-inner' 
-                                : 'bg-sky-500 text-white shadow-md shadow-sky-200 hover:bg-sky-600 hover:scale-105'
-                            }`}
-                          >
-                            {isPlaying ? <Pause size={20} strokeWidth={2.5} /> : <Volume2 size={20} strokeWidth={2.5} />}
-                          </button>
                         </div>
                       </div>
                       
@@ -513,9 +452,7 @@ export default function App() {
                           </div>
                         </div>
                       ) : (
-                        <p className={`text-2xl md:text-3xl font-semibold leading-relaxed ${
-                          isPlaying ? 'text-sky-900' : 'text-slate-700'
-                        }`}>
+                        <p className="text-2xl md:text-3xl font-semibold leading-relaxed text-slate-700">
                           {lesson.lesson}
                         </p>
                       )}
