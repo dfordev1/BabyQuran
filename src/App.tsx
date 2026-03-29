@@ -54,22 +54,42 @@ export default function App() {
     setLoading(true);
     setError(null);
     try {
-      const { data, error } = await supabase
-        .from('baby_quran_lessons')
-        .select('*')
-        .order('chapter_no', { ascending: true })
-        .order('verse_no', { ascending: true });
+      let allData: Lesson[] = [];
+      let hasMore = true;
+      let page = 0;
+      const pageSize = 1000;
 
-      if (error) {
-        if (error.code === '42P01') {
-          throw new Error('Table "baby_quran_lessons" does not exist.');
+      while (hasMore) {
+        const { data, error } = await supabase
+          .from('baby_quran_lessons')
+          .select('*')
+          .order('chapter_no', { ascending: true })
+          .order('verse_no', { ascending: true })
+          .range(page * pageSize, (page + 1) * pageSize - 1);
+
+        if (error) {
+          if (error.code === '42P01') {
+            throw new Error('Table "baby_quran_lessons" does not exist.');
+          }
+          throw error;
         }
-        throw error;
+
+        if (data && data.length > 0) {
+          allData = [...allData, ...data];
+          if (data.length < pageSize) {
+            hasMore = false;
+          } else {
+            page++;
+          }
+        } else {
+          hasMore = false;
+        }
       }
-      setLessons(data || []);
+
+      setLessons(allData);
       
-      if (data && data.length > 0 && selectedChapter === null) {
-        const firstChapter = Math.min(...data.map(d => d.chapter_no));
+      if (allData.length > 0 && selectedChapter === null) {
+        const firstChapter = Math.min(...allData.map(d => d.chapter_no));
         setSelectedChapter(firstChapter);
       }
     } catch (err: any) {
@@ -115,15 +135,21 @@ export default function App() {
           });
           const uniqueLessons = Array.from(uniqueLessonsMap.values());
 
-          const { error: insertError } = await supabase
-            .from('baby_quran_lessons')
-            .upsert(uniqueLessons, { onConflict: 'baby_quran_lessons_chapter_no_verse_no_key' });
+          // Supabase/PostgREST has a limit on the payload size and number of rows per request.
+          // Batching the upsert into chunks of 500 rows prevents errors for large CSVs.
+          const BATCH_SIZE = 500;
+          for (let i = 0; i < uniqueLessons.length; i += BATCH_SIZE) {
+            const batch = uniqueLessons.slice(i, i + BATCH_SIZE);
+            const { error: insertError } = await supabase
+              .from('baby_quran_lessons')
+              .upsert(batch, { onConflict: 'baby_quran_lessons_chapter_no_verse_no_key' });
 
-          if (insertError) {
-             const { error: fallbackError } = await supabase
-                .from('baby_quran_lessons')
-                .upsert(uniqueLessons, { onConflict: 'chapter_no,verse_no' });
-             if (fallbackError) throw fallbackError;
+            if (insertError) {
+               const { error: fallbackError } = await supabase
+                  .from('baby_quran_lessons')
+                  .upsert(batch, { onConflict: 'chapter_no,verse_no' });
+               if (fallbackError) throw fallbackError;
+            }
           }
 
           await fetchLessons();
