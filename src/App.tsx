@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import Papa from 'papaparse';
 import { createClient } from '@supabase/supabase-js';
-import { Play, Pause, Upload, BookOpen, Volume2, DatabaseZap, Edit2, Check, X, Palette, Presentation, Timer, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Play, Pause, Upload, Volume2, Edit2, Check, X, Presentation, Timer, ChevronLeft, ChevronRight, Sparkles, Cloud, BookHeart } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
 
 const supabaseUrl = 'https://woylhshulcoidlacxqcc.supabase.co';
 const supabaseKey = 'sb_publishable_ZLYKhSjkWtArPZ4Ek59HWA_-MG29OgY';
@@ -39,13 +40,11 @@ export default function App() {
   const [playingVerse, setPlayingVerse] = useState<number | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
-  const [isPlayfulTheme, setIsPlayfulTheme] = useState(true);
-  
   // Flashcard state
   const [isFlashcardMode, setIsFlashcardMode] = useState(false);
   const [flashcardIndex, setFlashcardIndex] = useState(0);
   const [isFlashcardPlaying, setIsFlashcardPlaying] = useState(false);
-  const [flashcardSpeed, setFlashcardSpeed] = useState(3000); // 3 seconds default
+  const [flashcardSpeed, setFlashcardSpeed] = useState(3000);
   
   // Editing state
   const [editingVerseKey, setEditingVerseKey] = useState<string | null>(null);
@@ -118,65 +117,54 @@ export default function App() {
       skipEmptyLines: true,
       complete: async (results) => {
         try {
-          const parsedLessons: Lesson[] = results.data.map((row: any) => {
-            const keys = Object.keys(row);
-            const chapterKey = keys.find(k => k.toLowerCase().includes('chapter')) || keys[0];
-            const verseKey = keys.find(k => k.toLowerCase().includes('verse')) || keys[1];
-            const lessonKey = keys.find(k => k.toLowerCase().includes('lesson')) || keys[2];
-
-            return {
-              chapter_no: parseInt(row[chapterKey], 10),
-              verse_no: parseInt(row[verseKey], 10),
-              lesson: row[lessonKey],
-            };
-          }).filter(l => !isNaN(l.chapter_no) && !isNaN(l.verse_no) && l.lesson);
+          const parsedLessons: Lesson[] = results.data.map((row: any) => ({
+            chapter_no: parseInt(row['Quran Chapter No'] || row['chapter_no']),
+            verse_no: parseInt(row['Verse No'] || row['verse_no']),
+            lesson: row['Baby Quran Lesson /Lessons from it'] || row['lesson'] || row['Lesson']
+          })).filter(l => !isNaN(l.chapter_no) && !isNaN(l.verse_no) && l.lesson);
 
           if (parsedLessons.length === 0) {
-            throw new Error('No valid lessons found in CSV. Check column headers.');
+            throw new Error("No valid data found. Please check CSV format.");
           }
 
           const uniqueLessonsMap = new Map<string, Lesson>();
-          parsedLessons.forEach(l => {
-            uniqueLessonsMap.set(`${l.chapter_no}-${l.verse_no}`, l);
+          parsedLessons.forEach(lesson => {
+            const key = `${lesson.chapter_no}-${lesson.verse_no}`;
+            uniqueLessonsMap.set(key, lesson);
           });
           const uniqueLessons = Array.from(uniqueLessonsMap.values());
 
-          // Supabase/PostgREST has a limit on the payload size and number of rows per request.
-          // Batching the upsert into chunks of 500 rows prevents errors for large CSVs.
           const BATCH_SIZE = 500;
           for (let i = 0; i < uniqueLessons.length; i += BATCH_SIZE) {
             const batch = uniqueLessons.slice(i, i + BATCH_SIZE);
-            const { error: insertError } = await supabase
+            const { error: upsertError } = await supabase
               .from('baby_quran_lessons')
-              .upsert(batch, { onConflict: 'baby_quran_lessons_chapter_no_verse_no_key' });
+              .upsert(batch, { 
+                onConflict: 'chapter_no,verse_no',
+                ignoreDuplicates: false
+              });
 
-            if (insertError) {
-               const { error: fallbackError } = await supabase
-                  .from('baby_quran_lessons')
-                  .upsert(batch, { onConflict: 'chapter_no,verse_no' });
-               if (fallbackError) throw fallbackError;
-            }
+            if (upsertError) throw upsertError;
           }
 
           await fetchLessons();
+          
         } catch (err: any) {
           console.error('Upload error:', err);
-          setError(err.message || 'Failed to upload lessons. Check table schema.');
+          setError(err.message || 'Failed to upload lessons.');
         } finally {
           setUploading(false);
-          e.target.value = '';
+          if (e.target) e.target.value = '';
         }
       },
       error: (err) => {
-        setError(err.message);
+        setError(`CSV Parse Error: ${err.message}`);
         setUploading(false);
-        e.target.value = '';
       }
     });
   };
 
   const handleSaveEdit = async (chapter_no: number, verse_no: number) => {
-    if (!editValue.trim()) return;
     setSavingEdit(true);
     try {
       const { error } = await supabase
@@ -194,8 +182,8 @@ export default function App() {
       ));
       setEditingVerseKey(null);
     } catch (err: any) {
-      console.error('Error updating lesson:', err);
-      alert('Failed to save lesson: ' + err.message);
+      console.error("Error saving edit:", err);
+      alert("Failed to save edit: " + err.message);
     } finally {
       setSavingEdit(false);
     }
@@ -205,11 +193,12 @@ export default function App() {
     if (audioRef.current) {
       audioRef.current.pause();
     }
-    const chapterStr = String(chapter).padStart(3, '0');
-    const verseStr = String(verse).padStart(3, '0');
-    const url = `https://everyayah.com/data/Alafasy_128kbps/${chapterStr}${verseStr}.mp3`;
     
-    const audio = new Audio(url);
+    const formattedChapter = chapter.toString().padStart(3, '0');
+    const formattedVerse = verse.toString().padStart(3, '0');
+    const audioUrl = `https://everyayah.com/data/Alafasy_128kbps/${formattedChapter}${formattedVerse}.mp3`;
+    
+    const audio = new Audio(audioUrl);
     audioRef.current = audio;
     
     audio.onplay = () => setPlayingVerse(verse);
@@ -218,16 +207,18 @@ export default function App() {
       const chapterLessons = lessons.filter(l => l.chapter_no === chapter).sort((a,b) => a.verse_no - b.verse_no);
       const currentIndex = chapterLessons.findIndex(l => l.verse_no === verse);
       if (currentIndex !== -1 && currentIndex < chapterLessons.length - 1) {
-        const nextVerse = chapterLessons[currentIndex + 1].verse_no;
-        playAudio(chapter, nextVerse);
+        playAudio(chapter, chapterLessons[currentIndex + 1].verse_no);
       }
     };
     audio.onerror = () => {
+      console.error("Audio failed to load:", audioUrl);
       setPlayingVerse(null);
-      console.error("Audio failed to load");
-    }
+    };
     
-    audio.play();
+    audio.play().catch(err => {
+      console.error("Playback prevented:", err);
+      setPlayingVerse(null);
+    });
   };
 
   const stopAudio = () => {
@@ -266,290 +257,283 @@ export default function App() {
     ? lessons.filter(l => l.chapter_no === selectedChapter).sort((a,b) => a.verse_no - b.verse_no)
     : [];
 
-  // Theme Classes
-  const theme = {
-    bg: isPlayfulTheme ? 'bg-sky-50 text-slate-800' : 'bg-white text-black selection:bg-black selection:text-white',
-    header: isPlayfulTheme ? 'bg-white shadow-sm rounded-b-[3rem] border-b-0 p-6 md:p-8 mb-8' : 'p-6 md:p-12 border-b-8 border-black mb-8',
-    title: isPlayfulTheme ? 'text-4xl md:text-5xl font-extrabold text-indigo-600 tracking-tight' : 'text-5xl md:text-7xl font-black tracking-tighter uppercase leading-none',
-    subtitle: isPlayfulTheme ? 'text-lg font-medium text-sky-500 mt-1' : 'text-xl font-bold uppercase tracking-widest text-gray-400 mt-2',
-    btnPrimary: isPlayfulTheme 
-      ? 'bg-indigo-500 text-white rounded-full px-6 py-3 font-bold shadow-md hover:bg-indigo-600 hover:shadow-lg hover:-translate-y-1 transition-all flex items-center gap-2' 
-      : 'border-4 border-black px-8 py-4 text-xl font-black uppercase transition-all flex items-center gap-3 bg-black text-white hover:bg-white hover:text-black shadow-[4px_4px_0_0_rgba(0,0,0,1)] hover:translate-y-1 hover:shadow-none',
-    btnSecondary: isPlayfulTheme
-      ? 'bg-white text-indigo-600 border-2 border-indigo-100 rounded-full px-6 py-3 font-bold shadow-sm hover:bg-indigo-50 transition-all flex items-center gap-2'
-      : 'border-4 border-black px-8 py-4 text-xl font-black uppercase transition-all flex items-center gap-3 bg-white text-black hover:bg-black hover:text-white shadow-[4px_4px_0_0_rgba(0,0,0,1)] hover:translate-y-1 hover:shadow-none',
-    sidebarCard: isPlayfulTheme
-      ? 'bg-white rounded-3xl shadow-sm border border-sky-100 p-6 flex flex-col gap-4'
-      : 'flex flex-col gap-4',
-    chapterBtn: (isActive: boolean) => isPlayfulTheme
-      ? `text-left px-6 py-4 text-lg font-bold rounded-2xl transition-all flex flex-col ${isActive ? 'bg-indigo-500 text-white shadow-md' : 'bg-sky-50 text-slate-600 hover:bg-sky-100'}`
-      : `text-left px-8 py-6 text-2xl font-black uppercase transition-all border-4 border-black flex flex-col ${isActive ? 'bg-black text-white shadow-[8px_8px_0_0_rgba(0,0,0,0.2)]' : 'bg-white text-black hover:bg-gray-100 shadow-[8px_8px_0_0_rgba(0,0,0,1)] hover:translate-y-1 hover:shadow-[4px_4px_0_0_rgba(0,0,0,1)]'}`,
-    lessonCard: (verse: number, isPlaying: boolean) => {
-      if (!isPlayfulTheme) {
-        return `p-8 md:p-12 border-8 transition-all duration-300 ${isPlaying ? 'border-black bg-black text-white scale-[1.02] shadow-2xl' : 'border-black bg-white text-black shadow-[12px_12px_0_0_rgba(0,0,0,1)] hover:translate-y-1 hover:shadow-[8px_8px_0_0_rgba(0,0,0,1)]'}`;
-      }
-      const colors = ['bg-pink-100', 'bg-yellow-100', 'bg-green-100', 'bg-purple-100'];
-      const color = colors[verse % 4];
-      return `p-8 md:p-10 rounded-[2.5rem] transition-all duration-300 ${color} ${isPlaying ? 'scale-[1.02] shadow-xl ring-4 ring-white' : 'shadow-sm hover:shadow-md hover:-translate-y-1'}`;
-    },
-    playBtn: (isPlaying: boolean) => isPlayfulTheme
-      ? `p-4 rounded-full shadow-sm transition-transform hover:scale-110 ${isPlaying ? 'bg-white text-indigo-500' : 'bg-white text-slate-700'}`
-      : `p-4 rounded-full border-4 border-black transition-colors ${isPlaying ? 'bg-white text-black' : 'bg-black text-white hover:bg-white hover:text-black'}`,
-    verseText: isPlayfulTheme ? 'text-3xl md:text-4xl font-extrabold text-slate-800 leading-snug' : 'text-4xl md:text-5xl font-black leading-tight tracking-tight'
-  };
-
   return (
-    <div className={`min-h-screen font-sans transition-colors duration-500 ${theme.bg}`}>
-      <header className={`flex flex-col md:flex-row justify-between items-start md:items-center gap-6 ${theme.header}`}>
-        <div>
-          <h1 className={theme.title}>Baby Quran</h1>
-          <p className={theme.subtitle}>Simple Lessons</p>
-        </div>
-        <div className="flex flex-wrap items-center gap-4">
-          <button 
-            onClick={() => setIsPlayfulTheme(!isPlayfulTheme)}
-            className={theme.btnSecondary}
-          >
-            <Palette size={24} strokeWidth={isPlayfulTheme ? 2.5 : 3} />
-            <span>{isPlayfulTheme ? 'Brutalist Theme' : 'Playful Theme'}</span>
-          </button>
-
-          <label className={`cursor-pointer ${theme.btnPrimary} ${uploading ? 'opacity-50 cursor-not-allowed' : ''}`}>
-            <Upload size={24} strokeWidth={isPlayfulTheme ? 2.5 : 3} />
+    <div className="min-h-screen flex flex-col md:flex-row p-4 md:p-8 gap-8 max-w-[1600px] mx-auto">
+      {/* Sidebar */}
+      <motion.aside 
+        initial={{ opacity: 0, x: -20 }}
+        animate={{ opacity: 1, x: 0 }}
+        className="w-full md:w-[340px] flex-shrink-0 flex flex-col gap-6"
+      >
+        {/* Logo Area */}
+        <div className="bg-white rounded-[2.5rem] p-8 shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-[#F0EBE1] flex flex-col items-center text-center relative overflow-hidden">
+          <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-sky-400 via-indigo-400 to-purple-400"></div>
+          <div className="bg-sky-50 p-4 rounded-full mb-4 text-sky-500 shadow-inner">
+            <BookHeart size={40} strokeWidth={2.5} />
+          </div>
+          <h1 className="text-3xl font-bold text-slate-800 tracking-tight">Baby Quran</h1>
+          <p className="text-slate-500 font-medium mt-2">Gentle lessons for little hearts</p>
+          
+          <label className="mt-8 w-full cursor-pointer bg-slate-50 hover:bg-sky-50 text-slate-600 hover:text-sky-600 border-2 border-dashed border-slate-200 hover:border-sky-200 transition-all duration-300 rounded-2xl p-4 flex flex-col items-center justify-center gap-2 font-semibold group">
+            <input type="file" accept=".csv" onChange={handleFileUpload} className="hidden" disabled={uploading} />
+            <Upload size={24} className="group-hover:-translate-y-1 transition-transform" />
             <span>{uploading ? 'Uploading...' : 'Upload CSV'}</span>
-            <input type="file" accept=".csv" className="hidden" onChange={handleFileUpload} disabled={uploading} />
           </label>
+          {error && <p className="text-red-500 text-sm mt-4 bg-red-50 p-3 rounded-xl w-full">{error}</p>}
         </div>
-      </header>
 
-      <main className="p-6 md:px-12 md:pb-12 max-w-7xl mx-auto">
-        {error && (
-          <div className={`p-8 mb-12 ${isPlayfulTheme ? 'bg-red-50 rounded-3xl border-2 border-red-200' : 'bg-white border-8 border-black shadow-[12px_12px_0_0_rgba(0,0,0,1)]'}`}>
-            <div className={`flex items-center gap-4 mb-4 ${isPlayfulTheme ? 'text-red-500' : 'text-red-600'}`}>
-              <DatabaseZap size={40} strokeWidth={isPlayfulTheme ? 2.5 : 3} />
-              <h3 className={`text-3xl ${isPlayfulTheme ? 'font-bold' : 'font-black uppercase tracking-tight'}`}>Database Error</h3>
-            </div>
-            <p className="text-xl font-bold mb-6">{error}</p>
-            <div className={`p-6 font-mono text-sm md:text-base overflow-x-auto ${isPlayfulTheme ? 'bg-white rounded-2xl border border-red-100' : 'bg-gray-100 border-4 border-black'}`}>
-              <p className={`font-bold mb-4 ${isPlayfulTheme ? 'text-red-400' : 'uppercase tracking-widest text-gray-500'}`}>Run this in Supabase SQL Editor:</p>
-              <pre className="whitespace-pre-wrap">
-{`CREATE TABLE baby_quran_lessons (
-  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-  chapter_no INT NOT NULL,
-  verse_no INT NOT NULL,
-  lesson TEXT NOT NULL,
-  UNIQUE(chapter_no, verse_no)
-);
--- Optional: Allow public read/write if using anon key
-ALTER TABLE baby_quran_lessons ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Allow public read" ON baby_quran_lessons FOR SELECT USING (true);
-CREATE POLICY "Allow public insert" ON baby_quran_lessons FOR INSERT WITH CHECK (true);
-CREATE POLICY "Allow public update" ON baby_quran_lessons FOR UPDATE USING (true);
-`}
-              </pre>
-            </div>
+        {/* Chapters List */}
+        <div className="bg-white rounded-[2.5rem] shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-[#F0EBE1] flex-1 overflow-hidden flex flex-col max-h-[60vh] md:max-h-none">
+          <div className="p-6 border-b border-slate-100 bg-white z-10">
+            <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+              <Sparkles size={20} className="text-amber-400" />
+              Chapters
+            </h2>
           </div>
-        )}
+          <div className="overflow-y-auto flex-1 p-4 flex flex-col gap-2">
+            {loading ? (
+              <div className="text-center p-4 text-slate-400 font-medium animate-pulse">Loading...</div>
+            ) : chapters.length === 0 ? (
+              <div className="text-center p-4 text-slate-400 font-medium">No chapters yet. Upload a CSV!</div>
+            ) : (
+              chapters.map(chapter => (
+                <button
+                  key={chapter}
+                  onClick={() => setSelectedChapter(chapter)}
+                  className={`w-full text-left px-6 py-4 rounded-2xl font-bold transition-all duration-300 flex items-center justify-between group ${
+                    selectedChapter === chapter 
+                      ? 'bg-sky-500 text-white shadow-md shadow-sky-200 scale-[1.02]' 
+                      : 'bg-transparent text-slate-600 hover:bg-slate-50 hover:scale-[1.01]'
+                  }`}
+                >
+                  <span className="truncate pr-2">{SURAH_NAMES[chapter - 1] || `Chapter ${chapter}`}</span>
+                  <span className={`text-sm px-3 py-1 rounded-full transition-colors ${
+                    selectedChapter === chapter ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-400 group-hover:bg-slate-200'
+                  }`}>
+                    {chapter}
+                  </span>
+                </button>
+              ))
+            )}
+          </div>
+        </div>
+      </motion.aside>
 
-        {loading ? (
-          <div className="flex justify-center items-center py-32">
-            <div className={`animate-spin rounded-full h-24 w-24 ${isPlayfulTheme ? 'border-4 border-indigo-200 border-t-indigo-600' : 'border-t-8 border-b-8 border-black'}`}></div>
-          </div>
-        ) : lessons.length === 0 && !error ? (
-          <div className={`text-center py-32 ${isPlayfulTheme ? 'bg-white rounded-[3rem] shadow-sm border border-sky-100' : 'border-8 border-dashed border-gray-200 rounded-3xl'}`}>
-            <BookOpen size={120} strokeWidth={isPlayfulTheme ? 1.5 : 1} className={`mx-auto mb-8 ${isPlayfulTheme ? 'text-indigo-200' : 'text-gray-300'}`} />
-            <h2 className={`text-4xl md:text-5xl mb-6 ${isPlayfulTheme ? 'font-extrabold text-slate-700' : 'font-black uppercase tracking-tighter'}`}>No Lessons Yet</h2>
-            <p className={`text-xl md:text-2xl font-medium ${isPlayfulTheme ? 'text-slate-500' : 'text-gray-500 font-bold'}`}>Upload a CSV file with Chapter, Verse, and Lesson columns.</p>
-          </div>
-        ) : chapters.length > 0 ? (
-          <div className="grid grid-cols-1 lg:grid-cols-4 gap-8 md:gap-12">
-            <div className="lg:col-span-1">
-              <div className={theme.sidebarCard}>
-                <h3 className={`text-lg mb-2 ${isPlayfulTheme ? 'font-bold text-sky-400 px-2' : 'font-black uppercase tracking-widest text-gray-400'}`}>Surah Index</h3>
-                <div className="flex flex-row lg:flex-col gap-3 overflow-x-auto pb-4 lg:pb-0">
-                  {chapters.map(chap => {
-                    const surahName = SURAH_NAMES[chap - 1] || `Surah ${chap}`;
-                    return (
-                      <button
-                        key={chap}
-                        onClick={() => {
-                          setSelectedChapter(chap);
-                          stopAudio();
-                        }}
-                        className={theme.chapterBtn(selectedChapter === chap)}
-                      >
-                        <span className={isPlayfulTheme ? 'text-sm opacity-70 mb-1' : 'text-sm text-gray-500 tracking-widest'}>Chapter {chap}</span>
-                        <span>{surahName}</span>
-                      </button>
-                    );
-                  })}
-                </div>
+      {/* Main Content */}
+      <main className="flex-1 flex flex-col min-w-0">
+        {selectedChapter ? (
+          <motion.div 
+            key={selectedChapter}
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="flex-1 flex flex-col"
+          >
+            {/* Header Bar */}
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-6 mb-8 bg-white p-6 md:p-8 rounded-[2.5rem] shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-[#F0EBE1]">
+              <div>
+                <h2 className="text-4xl md:text-5xl font-bold text-slate-800 tracking-tight">
+                  {SURAH_NAMES[selectedChapter - 1] || `Chapter ${selectedChapter}`}
+                </h2>
+                <p className="text-sky-500 font-semibold text-lg mt-2 flex items-center gap-2">
+                  <Cloud size={20} /> Chapter {selectedChapter}
+                </p>
+              </div>
+              
+              <div className="flex flex-wrap gap-3 bg-slate-50 p-2 rounded-full border border-slate-100">
+                <button
+                  onClick={() => setIsFlashcardMode(!isFlashcardMode)}
+                  className={`px-6 py-3 rounded-full font-bold flex items-center gap-2 transition-all ${
+                    isFlashcardMode 
+                      ? 'bg-indigo-100 text-indigo-600 shadow-sm' 
+                      : 'text-slate-500 hover:bg-white hover:shadow-sm'
+                  }`}
+                >
+                  <Presentation size={20} strokeWidth={2.5} />
+                  <span>Flashcards</span>
+                </button>
+                <button 
+                  onClick={() => {
+                    const firstVerse = chapterLessons[0]?.verse_no;
+                    if (firstVerse) playAudio(selectedChapter, firstVerse);
+                  }}
+                  className="bg-sky-500 text-white px-6 py-3 rounded-full font-bold flex items-center gap-2 shadow-md shadow-sky-200 hover:bg-sky-600 hover:shadow-lg hover:-translate-y-0.5 transition-all"
+                >
+                  <Play size={20} strokeWidth={2.5} /> 
+                  <span>Autoplay</span>
+                </button>
               </div>
             </div>
-            
-            <div className="lg:col-span-3">
-              {selectedChapter ? (
-                <div>
-                  <div className={`flex flex-col sm:flex-row justify-between items-start sm:items-center mb-8 pb-6 gap-6 ${isPlayfulTheme ? 'border-b-2 border-sky-100' : 'border-b-8 border-black'}`}>
-                    <div>
-                      <h2 className={`text-4xl md:text-6xl ${isPlayfulTheme ? 'font-extrabold text-slate-800' : 'font-black uppercase tracking-tighter leading-none'}`}>
-                        {SURAH_NAMES[selectedChapter - 1] || `Chapter ${selectedChapter}`}
-                      </h2>
-                      <p className={`mt-2 ${isPlayfulTheme ? 'text-xl font-medium text-sky-500' : 'text-xl font-bold uppercase tracking-widest text-gray-400'}`}>
-                        Chapter {selectedChapter}
-                      </p>
+
+            {/* Content */}
+            {isFlashcardMode && chapterLessons.length > 0 ? (
+              <div className="flex-1 flex flex-col items-center justify-center max-w-5xl mx-auto w-full">
+                <AnimatePresence mode="wait">
+                  <motion.div 
+                    key={flashcardIndex}
+                    initial={{ opacity: 0, scale: 0.95, y: 20 }}
+                    animate={{ opacity: 1, scale: 1, y: 0 }}
+                    exit={{ opacity: 0, scale: 1.05, y: -20 }}
+                    transition={{ duration: 0.4, type: "spring", bounce: 0.4 }}
+                    className="w-full aspect-[4/3] md:aspect-[16/9] bg-white rounded-[3rem] shadow-[0_20px_60px_rgb(0,0,0,0.06)] border border-[#F0EBE1] flex flex-col items-center justify-center p-8 md:p-16 text-center relative overflow-hidden group"
+                  >
+                    {/* Decorative background elements */}
+                    <div className="absolute top-0 left-0 w-full h-full overflow-hidden pointer-events-none opacity-40 transition-opacity group-hover:opacity-60">
+                      <div className="absolute -top-20 -left-20 w-64 h-64 bg-sky-100 rounded-full blur-3xl"></div>
+                      <div className="absolute -bottom-20 -right-20 w-64 h-64 bg-indigo-100 rounded-full blur-3xl"></div>
                     </div>
-                    <div className="flex flex-wrap gap-3">
-                      <button
-                        onClick={() => setIsFlashcardMode(!isFlashcardMode)}
-                        className={theme.btnSecondary}
-                      >
-                        <Presentation size={24} strokeWidth={isPlayfulTheme ? 2.5 : 3} />
-                        <span>{isFlashcardMode ? 'Exit Flashcards' : 'Flashcards'}</span>
-                      </button>
-                      <button 
-                        onClick={() => {
-                          const firstVerse = chapterLessons[0]?.verse_no;
-                          if (firstVerse) playAudio(selectedChapter, firstVerse);
-                        }}
-                        className={theme.btnPrimary}
-                      >
-                        <Play size={24} strokeWidth={isPlayfulTheme ? 2.5 : 3} /> 
-                        <span>Autoplay All</span>
-                      </button>
-                    </div>
-                  </div>
+
+                    <span className="relative z-10 text-xl md:text-2xl font-bold text-sky-500 mb-8 bg-sky-50 px-6 py-2 rounded-full border border-sky-100 shadow-sm">
+                      Verse {chapterLessons[flashcardIndex].verse_no}
+                    </span>
+                    <p className="relative z-10 text-4xl md:text-6xl lg:text-7xl leading-tight font-bold text-slate-800 tracking-tight max-w-4xl">
+                      {chapterLessons[flashcardIndex].lesson}
+                    </p>
+                  </motion.div>
+                </AnimatePresence>
+                
+                {/* Flashcard Controls */}
+                <motion.div 
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="mt-8 flex flex-wrap items-center justify-center gap-4 p-3 bg-white rounded-full shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-[#F0EBE1]"
+                >
+                  <button 
+                    onClick={() => setFlashcardIndex(Math.max(0, flashcardIndex - 1))}
+                    disabled={flashcardIndex === 0}
+                    className={`p-4 rounded-full transition-colors ${flashcardIndex === 0 ? 'opacity-30 cursor-not-allowed' : 'text-slate-500 hover:bg-slate-50 hover:text-sky-500'}`}
+                  >
+                    <ChevronLeft size={28} strokeWidth={2.5} />
+                  </button>
                   
-                  {isFlashcardMode && chapterLessons.length > 0 ? (
-                    <div className="flex flex-col items-center">
-                      <div className={`w-full min-h-[400px] flex flex-col items-center justify-center p-8 md:p-16 text-center transition-all duration-500 ${isPlayfulTheme ? 'bg-white rounded-[3rem] shadow-xl border-4 border-sky-100' : 'bg-white border-8 border-black shadow-[12px_12px_0_0_rgba(0,0,0,1)]'}`}>
-                        <span className={`text-2xl md:text-3xl mb-8 ${isPlayfulTheme ? 'font-bold text-sky-400' : 'font-black uppercase tracking-widest text-gray-400'}`}>
-                          Verse {chapterLessons[flashcardIndex].verse_no}
-                        </span>
-                        <p className={`text-4xl md:text-6xl leading-tight ${isPlayfulTheme ? 'font-extrabold text-slate-700' : 'font-black uppercase tracking-tighter text-black'}`}>
-                          {chapterLessons[flashcardIndex].lesson}
-                        </p>
+                  <button 
+                    onClick={() => setIsFlashcardPlaying(!isFlashcardPlaying)}
+                    className="p-5 rounded-full transition-all hover:scale-110 bg-indigo-500 text-white shadow-lg shadow-indigo-200 hover:bg-indigo-600"
+                  >
+                    {isFlashcardPlaying ? <Pause size={28} strokeWidth={2.5} /> : <Play size={28} strokeWidth={2.5} />}
+                  </button>
+                  
+                  <button 
+                    onClick={() => setFlashcardIndex(Math.min(chapterLessons.length - 1, flashcardIndex + 1))}
+                    disabled={flashcardIndex === chapterLessons.length - 1}
+                    className={`p-4 rounded-full transition-colors ${flashcardIndex === chapterLessons.length - 1 ? 'opacity-30 cursor-not-allowed' : 'text-slate-500 hover:bg-slate-50 hover:text-sky-500'}`}
+                  >
+                    <ChevronRight size={28} strokeWidth={2.5} />
+                  </button>
+                  
+                  <div className="w-px h-10 mx-2 bg-slate-100"></div>
+                  
+                  <div className="flex items-center gap-3 px-4 py-2 bg-slate-50 rounded-full">
+                    <Timer size={20} className="text-sky-500" strokeWidth={2.5} />
+                    <select 
+                      value={flashcardSpeed}
+                      onChange={(e) => setFlashcardSpeed(Number(e.target.value))}
+                      className="font-bold outline-none cursor-pointer bg-transparent text-slate-600"
+                    >
+                      <option value={1000}>1s</option>
+                      <option value={2000}>2s</option>
+                      <option value={3000}>3s</option>
+                      <option value={5000}>5s</option>
+                      <option value={10000}>10s</option>
+                    </select>
+                  </div>
+                </motion.div>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 gap-6 pb-12">
+                {chapterLessons.map((lesson, idx) => {
+                  const isPlaying = playingVerse === lesson.verse_no;
+                  const isEditing = editingVerseKey === `${lesson.chapter_no}-${lesson.verse_no}`;
+
+                  return (
+                    <motion.div 
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: Math.min(idx * 0.05, 0.5) }}
+                      key={lesson.verse_no} 
+                      className={`bg-white rounded-[2rem] p-6 md:p-8 shadow-[0_4px_20px_rgb(0,0,0,0.03)] border transition-all duration-300 ${
+                        isPlaying ? 'border-sky-300 shadow-sky-100 scale-[1.01]' : 'border-[#F0EBE1] hover:border-sky-200 hover:shadow-md'
+                      }`}
+                    >
+                      <div className="flex justify-between items-start mb-6 gap-4">
+                        <div className={`px-5 py-2 rounded-full text-sm font-bold shadow-sm ${
+                          isPlaying ? 'bg-sky-500 text-white' : 'bg-sky-50 text-sky-600'
+                        }`}>
+                          Verse {lesson.verse_no}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {!isEditing && (
+                            <button 
+                              onClick={() => {
+                                setEditingVerseKey(`${lesson.chapter_no}-${lesson.verse_no}`);
+                                setEditValue(lesson.lesson);
+                              }}
+                              className="p-3 rounded-full text-slate-400 hover:bg-slate-50 hover:text-sky-500 transition-colors"
+                              title="Edit Lesson"
+                            >
+                              <Edit2 size={20} strokeWidth={2.5} />
+                            </button>
+                          )}
+                          <button 
+                            onClick={() => isPlaying ? stopAudio() : playAudio(lesson.chapter_no, lesson.verse_no)}
+                            className={`p-3 rounded-full transition-all ${
+                              isPlaying 
+                                ? 'bg-sky-100 text-sky-600 shadow-inner' 
+                                : 'bg-sky-500 text-white shadow-md shadow-sky-200 hover:bg-sky-600 hover:scale-105'
+                            }`}
+                          >
+                            {isPlaying ? <Pause size={20} strokeWidth={2.5} /> : <Volume2 size={20} strokeWidth={2.5} />}
+                          </button>
+                        </div>
                       </div>
                       
-                      <div className={`mt-8 flex flex-wrap items-center justify-center gap-4 p-4 rounded-full ${isPlayfulTheme ? 'bg-white shadow-md border border-sky-100' : 'bg-white border-4 border-black'}`}>
-                        <button 
-                          onClick={() => setFlashcardIndex(Math.max(0, flashcardIndex - 1))}
-                          disabled={flashcardIndex === 0}
-                          className={`p-3 rounded-full transition-colors ${flashcardIndex === 0 ? 'opacity-50 cursor-not-allowed' : ''} ${isPlayfulTheme ? 'text-slate-600 hover:bg-slate-100' : 'text-black hover:bg-gray-200'}`}
-                        >
-                          <ChevronLeft size={32} strokeWidth={isPlayfulTheme ? 2.5 : 3} />
-                        </button>
-                        
-                        <button 
-                          onClick={() => setIsFlashcardPlaying(!isFlashcardPlaying)}
-                          className={`p-4 rounded-full transition-transform hover:scale-110 ${isPlayfulTheme ? 'bg-indigo-500 text-white shadow-lg' : 'bg-black text-white border-4 border-black'}`}
-                        >
-                          {isFlashcardPlaying ? <Pause size={32} strokeWidth={isPlayfulTheme ? 2.5 : 3} /> : <Play size={32} strokeWidth={isPlayfulTheme ? 2.5 : 3} />}
-                        </button>
-                        
-                        <button 
-                          onClick={() => setFlashcardIndex(Math.min(chapterLessons.length - 1, flashcardIndex + 1))}
-                          disabled={flashcardIndex === chapterLessons.length - 1}
-                          className={`p-3 rounded-full transition-colors ${flashcardIndex === chapterLessons.length - 1 ? 'opacity-50 cursor-not-allowed' : ''} ${isPlayfulTheme ? 'text-slate-600 hover:bg-slate-100' : 'text-black hover:bg-gray-200'}`}
-                        >
-                          <ChevronRight size={32} strokeWidth={isPlayfulTheme ? 2.5 : 3} />
-                        </button>
-                        
-                        <div className={`w-px h-10 mx-2 ${isPlayfulTheme ? 'bg-slate-200' : 'bg-black'}`}></div>
-                        
-                        <div className="flex items-center gap-2">
-                          <Timer size={24} className={isPlayfulTheme ? 'text-sky-500' : 'text-black'} strokeWidth={isPlayfulTheme ? 2.5 : 3} />
-                          <select 
-                            value={flashcardSpeed}
-                            onChange={(e) => setFlashcardSpeed(Number(e.target.value))}
-                            className={`font-bold outline-none cursor-pointer ${isPlayfulTheme ? 'bg-transparent text-slate-700' : 'bg-transparent text-black uppercase'}`}
-                          >
-                            <option value={1000}>1s (Fast)</option>
-                            <option value={2000}>2s</option>
-                            <option value={3000}>3s (Normal)</option>
-                            <option value={5000}>5s</option>
-                            <option value={10000}>10s (Slow)</option>
-                          </select>
-                        </div>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="flex flex-col gap-6 md:gap-8">
-                      {chapterLessons.map(lesson => {
-                      const isPlaying = playingVerse === lesson.verse_no;
-                      const isEditing = editingVerseKey === `${lesson.chapter_no}-${lesson.verse_no}`;
-
-                      return (
-                        <div key={lesson.verse_no} className={theme.lessonCard(lesson.verse_no, isPlaying)}>
-                          <div className="flex justify-between items-start mb-6 gap-4">
-                            <span className={`text-xl md:text-2xl ${isPlayfulTheme ? 'font-bold text-slate-500' : 'font-black uppercase tracking-widest ' + (isPlaying ? 'text-gray-400' : 'text-gray-500')}`}>
-                              Verse {lesson.verse_no}
-                            </span>
-                            <div className="flex items-center gap-3">
-                              {!isEditing && (
-                                <button 
-                                  onClick={() => {
-                                    setEditingVerseKey(`${lesson.chapter_no}-${lesson.verse_no}`);
-                                    setEditValue(lesson.lesson);
-                                  }}
-                                  className={`p-3 rounded-full transition-colors ${isPlayfulTheme ? 'bg-white/50 text-slate-500 hover:bg-white' : 'border-4 border-black bg-white text-black hover:bg-black hover:text-white'}`}
-                                  title="Edit Lesson"
-                                >
-                                  <Edit2 size={20} strokeWidth={isPlayfulTheme ? 2.5 : 3} />
-                                </button>
-                              )}
-                              <button 
-                                onClick={() => isPlaying ? stopAudio() : playAudio(lesson.chapter_no, lesson.verse_no)}
-                                className={theme.playBtn(isPlaying)}
-                              >
-                                {isPlaying ? <Pause size={24} strokeWidth={isPlayfulTheme ? 2.5 : 3} /> : <Volume2 size={24} strokeWidth={isPlayfulTheme ? 2.5 : 3} />}
-                              </button>
-                            </div>
+                      {isEditing ? (
+                        <div className="flex flex-col gap-4">
+                          <textarea 
+                            value={editValue}
+                            onChange={(e) => setEditValue(e.target.value)}
+                            className="w-full p-6 text-2xl md:text-3xl font-bold resize-none outline-none bg-slate-50 rounded-2xl border-2 border-slate-200 focus:border-sky-300 focus:bg-white transition-colors"
+                            rows={3}
+                            autoFocus
+                          />
+                          <div className="flex gap-3 justify-end">
+                            <button 
+                              onClick={() => setEditingVerseKey(null)}
+                              className="px-6 py-3 font-bold flex items-center gap-2 bg-white text-slate-600 rounded-full hover:bg-slate-50 border border-slate-200"
+                              disabled={savingEdit}
+                            >
+                              <X size={20} /> Cancel
+                            </button>
+                            <button 
+                              onClick={() => handleSaveEdit(lesson.chapter_no, lesson.verse_no)}
+                              className="px-6 py-3 font-bold flex items-center gap-2 bg-indigo-500 text-white rounded-full hover:bg-indigo-600 shadow-md shadow-indigo-200"
+                              disabled={savingEdit}
+                            >
+                              {savingEdit ? 'Saving...' : <><Check size={20} /> Save</>}
+                            </button>
                           </div>
-                          
-                          {isEditing ? (
-                            <div className="flex flex-col gap-4">
-                              <textarea 
-                                value={editValue}
-                                onChange={(e) => setEditValue(e.target.value)}
-                                className={`w-full p-4 md:p-6 text-2xl md:text-3xl font-bold resize-none outline-none ${isPlayfulTheme ? 'bg-white/80 rounded-2xl border-2 border-white focus:border-indigo-300' : 'bg-gray-100 border-4 border-black'}`}
-                                rows={3}
-                                autoFocus
-                              />
-                              <div className="flex gap-3 justify-end">
-                                <button 
-                                  onClick={() => setEditingVerseKey(null)}
-                                  className={`px-6 py-3 font-bold flex items-center gap-2 ${isPlayfulTheme ? 'bg-white text-slate-600 rounded-full hover:bg-slate-50' : 'border-4 border-black bg-white text-black hover:bg-gray-200'}`}
-                                  disabled={savingEdit}
-                                >
-                                  <X size={20} /> Cancel
-                                </button>
-                                <button 
-                                  onClick={() => handleSaveEdit(lesson.chapter_no, lesson.verse_no)}
-                                  className={`px-6 py-3 font-bold flex items-center gap-2 ${isPlayfulTheme ? 'bg-indigo-500 text-white rounded-full hover:bg-indigo-600' : 'border-4 border-black bg-black text-white hover:bg-gray-800'}`}
-                                  disabled={savingEdit}
-                                >
-                                  {savingEdit ? 'Saving...' : <><Check size={20} /> Save</>}
-                                </button>
-                              </div>
-                            </div>
-                          ) : (
-                            <p className={theme.verseText}>{lesson.lesson}</p>
-                          )}
                         </div>
-                      );
-                    })}
-                  </div>
-                  )}
-                </div>
-              ) : (
-                <div className={`h-full min-h-[400px] flex items-center justify-center ${isPlayfulTheme ? 'text-sky-300 font-extrabold text-3xl' : 'text-gray-300 font-black uppercase text-4xl tracking-tighter'}`}>
-                  Select a Surah
-                </div>
-              )}
+                      ) : (
+                        <p className={`text-2xl md:text-3xl font-semibold leading-relaxed ${
+                          isPlaying ? 'text-sky-900' : 'text-slate-700'
+                        }`}>
+                          {lesson.lesson}
+                        </p>
+                      )}
+                    </motion.div>
+                  );
+                })}
+              </div>
+            )}
+          </motion.div>
+        ) : (
+          <div className="h-full min-h-[400px] flex flex-col items-center justify-center text-center p-8">
+            <div className="w-32 h-32 bg-sky-50 rounded-full flex items-center justify-center mb-6 shadow-inner">
+              <Sparkles size={48} className="text-sky-300" />
             </div>
+            <h2 className="text-3xl font-bold text-slate-400 mb-2">Select a Chapter</h2>
+            <p className="text-slate-400 font-medium">Choose a chapter from the sidebar to begin.</p>
           </div>
-        ) : null}
+        )}
       </main>
     </div>
   );
