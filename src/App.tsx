@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import Papa from 'papaparse';
 import { createClient } from '@supabase/supabase-js';
-import { Play, Pause, Upload, Edit2, Check, X, Presentation, Timer, ChevronLeft, ChevronRight, Sparkles, Cloud, BookHeart } from 'lucide-react';
+import { Play, Pause, Upload, Edit2, Check, X, Presentation, Timer, ChevronLeft, ChevronRight, Sparkles, Cloud, BookHeart, ZoomIn, ZoomOut, Layers, ChevronDown } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 const supabaseUrl = 'https://woylhshulcoidlacxqcc.supabase.co';
@@ -30,19 +30,33 @@ interface Lesson {
   lesson: string;
 }
 
+interface ThemeLesson {
+  id?: string;
+  serial: number;
+  theme: string;
+  subtheme: string;
+  verse: string;
+}
+
 export default function App() {
   const [lessons, setLessons] = useState<Lesson[]>([]);
+  const [themeLessons, setThemeLessons] = useState<ThemeLesson[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const [viewMode, setViewMode] = useState<'chapters' | 'themes'>('chapters');
   const [selectedChapter, setSelectedChapter] = useState<number | null>(null);
+  const [selectedTheme, setSelectedTheme] = useState<string | null>(null);
+  const [selectedSubtheme, setSelectedSubtheme] = useState<string | null>(null);
+  const [expandedTheme, setExpandedTheme] = useState<string | null>(null);
 
   // Flashcard state
   const [isFlashcardMode, setIsFlashcardMode] = useState(false);
   const [flashcardIndex, setFlashcardIndex] = useState(0);
   const [isFlashcardPlaying, setIsFlashcardPlaying] = useState(false);
   const [flashcardSpeed, setFlashcardSpeed] = useState(3000);
+  const [textSizeMultiplier, setTextSizeMultiplier] = useState(1);
   
   // Editing state
   const [editingVerseKey, setEditingVerseKey] = useState<string | null>(null);
@@ -51,7 +65,57 @@ export default function App() {
 
   useEffect(() => {
     fetchLessons();
+    fetchThemes();
   }, []);
+
+  const fetchThemes = async () => {
+    try {
+      let allData: ThemeLesson[] = [];
+      let hasMore = true;
+      let page = 0;
+      const pageSize = 1000;
+
+      while (hasMore) {
+        const { data, error } = await supabase
+          .from('baby_quran_themes')
+          .select('*')
+          .order('serial', { ascending: true })
+          .range(page * pageSize, (page + 1) * pageSize - 1);
+
+        if (error) {
+          if (error.code === '42P01') {
+            console.warn('Table "baby_quran_themes" does not exist yet.');
+            hasMore = false;
+            break;
+          }
+          throw error;
+        }
+
+        if (data && data.length > 0) {
+          allData = [...allData, ...data];
+          if (data.length < pageSize) {
+            hasMore = false;
+          } else {
+            page++;
+          }
+        } else {
+          hasMore = false;
+        }
+      }
+
+      setThemeLessons(allData);
+      
+      if (allData.length > 0 && selectedTheme === null) {
+        const firstTheme = allData[0].theme;
+        const firstSubtheme = allData.find(t => t.theme === firstTheme)?.subtheme || null;
+        setSelectedTheme(firstTheme);
+        setSelectedSubtheme(firstSubtheme);
+        setExpandedTheme(firstTheme);
+      }
+    } catch (err: any) {
+      console.error('Error fetching themes:', err);
+    }
+  };
 
   const fetchLessons = async () => {
     setLoading(true);
@@ -115,41 +179,84 @@ export default function App() {
       skipEmptyLines: true,
       complete: async (results) => {
         try {
-          const parsedLessons: Lesson[] = results.data.map((row: any) => ({
-            chapter_no: parseInt(row['Quran Chapter No'] || row['chapter_no']),
-            verse_no: parseInt(row['Verse No'] || row['verse_no']),
-            lesson: row['Baby Quran Lesson /Lessons from it'] || row['lesson'] || row['Lesson']
-          })).filter(l => !isNaN(l.chapter_no) && !isNaN(l.verse_no) && l.lesson);
+          const headers = results.meta.fields || [];
+          const isThemeCSV = headers.some(h => h.toLowerCase().trim() === 'theme');
 
-          if (parsedLessons.length === 0) {
-            throw new Error("No valid data found. Please check CSV format.");
+          if (isThemeCSV) {
+            const parsedThemes: ThemeLesson[] = results.data.map((row: any) => ({
+              serial: parseInt(row['serial'] || row['Serial']),
+              theme: row['theme'] || row['Theme'],
+              subtheme: row['subtheme'] || row['Subtheme'],
+              verse: row['verse'] || row['Verse']
+            })).filter(t => !isNaN(t.serial) && t.theme && t.subtheme && t.verse);
+
+            if (parsedThemes.length === 0) {
+              throw new Error("No valid theme data found. Please check CSV format.");
+            }
+
+            const uniqueThemesMap = new Map<number, ThemeLesson>();
+            parsedThemes.forEach(theme => {
+              uniqueThemesMap.set(theme.serial, theme);
+            });
+            const uniqueThemes = Array.from(uniqueThemesMap.values());
+
+            const BATCH_SIZE = 500;
+            for (let i = 0; i < uniqueThemes.length; i += BATCH_SIZE) {
+              const batch = uniqueThemes.slice(i, i + BATCH_SIZE);
+              const { error: upsertError } = await supabase
+                .from('baby_quran_themes')
+                .upsert(batch, { 
+                  onConflict: 'serial',
+                  ignoreDuplicates: false
+                });
+
+              if (upsertError) {
+                if (upsertError.code === '42P01') {
+                  throw new Error('Table "baby_quran_themes" does not exist. Please create it in Supabase with columns: serial (int8, primary key), theme (text), subtheme (text), verse (text).');
+                }
+                throw upsertError;
+              }
+            }
+
+            await fetchThemes();
+            setViewMode('themes');
+          } else {
+            const parsedLessons: Lesson[] = results.data.map((row: any) => ({
+              chapter_no: parseInt(row['Quran Chapter No'] || row['chapter_no'] || row['chapter']),
+              verse_no: parseInt(row['Verse No'] || row['verse_no']),
+              lesson: row['Baby Quran Lesson /Lessons from it'] || row['lesson'] || row['Lesson'] || row['simplified_verse_start']
+            })).filter(l => !isNaN(l.chapter_no) && !isNaN(l.verse_no) && l.lesson);
+
+            if (parsedLessons.length === 0) {
+              throw new Error("No valid data found. Please check CSV format.");
+            }
+
+            const uniqueLessonsMap = new Map<string, Lesson>();
+            parsedLessons.forEach(lesson => {
+              const key = `${lesson.chapter_no}-${lesson.verse_no}`;
+              uniqueLessonsMap.set(key, lesson);
+            });
+            const uniqueLessons = Array.from(uniqueLessonsMap.values());
+
+            const BATCH_SIZE = 500;
+            for (let i = 0; i < uniqueLessons.length; i += BATCH_SIZE) {
+              const batch = uniqueLessons.slice(i, i + BATCH_SIZE);
+              const { error: upsertError } = await supabase
+                .from('baby_quran_lessons')
+                .upsert(batch, { 
+                  onConflict: 'chapter_no,verse_no',
+                  ignoreDuplicates: false
+                });
+
+              if (upsertError) throw upsertError;
+            }
+
+            await fetchLessons();
+            setViewMode('chapters');
           }
-
-          const uniqueLessonsMap = new Map<string, Lesson>();
-          parsedLessons.forEach(lesson => {
-            const key = `${lesson.chapter_no}-${lesson.verse_no}`;
-            uniqueLessonsMap.set(key, lesson);
-          });
-          const uniqueLessons = Array.from(uniqueLessonsMap.values());
-
-          const BATCH_SIZE = 500;
-          for (let i = 0; i < uniqueLessons.length; i += BATCH_SIZE) {
-            const batch = uniqueLessons.slice(i, i + BATCH_SIZE);
-            const { error: upsertError } = await supabase
-              .from('baby_quran_lessons')
-              .upsert(batch, { 
-                onConflict: 'chapter_no,verse_no',
-                ignoreDuplicates: false
-              });
-
-            if (upsertError) throw upsertError;
-          }
-
-          await fetchLessons();
-          
         } catch (err: any) {
           console.error('Upload error:', err);
-          setError(err.message || 'Failed to upload lessons.');
+          setError(err.message || 'Failed to upload data.');
         } finally {
           setUploading(false);
           if (e.target) e.target.value = '';
@@ -187,34 +294,83 @@ export default function App() {
     }
   };
 
+  const handleSaveThemeEdit = async (serial: number) => {
+    setSavingEdit(true);
+    try {
+      const { error } = await supabase
+        .from('baby_quran_themes')
+        .update({ verse: editValue })
+        .eq('serial', serial);
+
+      if (error) throw error;
+
+      setThemeLessons(themeLessons.map(t => 
+        t.serial === serial 
+          ? { ...t, verse: editValue } 
+          : t
+      ));
+      setEditingVerseKey(null);
+    } catch (err: any) {
+      console.error("Error saving edit:", err);
+      alert("Failed to save edit: " + err.message);
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
   useEffect(() => {
     let timer: NodeJS.Timeout;
-    if (isFlashcardMode && isFlashcardPlaying && selectedChapter) {
-      const chapterLessons = lessons.filter(l => l.chapter_no === selectedChapter).sort((a,b) => a.verse_no - b.verse_no);
-      timer = setInterval(() => {
-        setFlashcardIndex(prev => {
-          if (prev < chapterLessons.length - 1) {
-            return prev + 1;
-          } else {
-            setIsFlashcardPlaying(false);
-            return prev;
-          }
-        });
-      }, flashcardSpeed);
+    if (isFlashcardMode && isFlashcardPlaying) {
+      const currentListLength = viewMode === 'chapters' 
+        ? lessons.filter(l => l.chapter_no === selectedChapter).length
+        : themeLessons.filter(t => t.theme === selectedTheme && t.subtheme === selectedSubtheme).length;
+
+      if (currentListLength > 0) {
+        timer = setInterval(() => {
+          setFlashcardIndex(prev => {
+            if (prev < currentListLength - 1) {
+              return prev + 1;
+            } else {
+              setIsFlashcardPlaying(false);
+              return prev;
+            }
+          });
+        }, flashcardSpeed);
+      }
     }
     return () => clearInterval(timer);
-  }, [isFlashcardMode, isFlashcardPlaying, flashcardSpeed, selectedChapter, lessons]);
+  }, [isFlashcardMode, isFlashcardPlaying, flashcardSpeed, selectedChapter, selectedTheme, selectedSubtheme, lessons, themeLessons, viewMode]);
 
   useEffect(() => {
     setFlashcardIndex(0);
     setIsFlashcardPlaying(false);
-  }, [selectedChapter]);
+  }, [selectedChapter, selectedTheme, selectedSubtheme, viewMode]);
 
-  const chapters = Array.from(new Set(lessons.map(l => l.chapter_no))).sort((a: number, b: number) => a - b);
+  const chapters = (Array.from(new Set(lessons.map(l => l.chapter_no))) as number[]).sort((a, b) => a - b);
 
-  const chapterLessons = selectedChapter 
-    ? lessons.filter(l => l.chapter_no === selectedChapter).sort((a,b) => a.verse_no - b.verse_no)
-    : [];
+  const currentDisplayItems = viewMode === 'chapters' 
+    ? (selectedChapter ? lessons.filter(l => l.chapter_no === selectedChapter).sort((a,b) => a.verse_no - b.verse_no).map(l => ({
+        key: `${l.chapter_no}-${l.verse_no}`,
+        badge: `Verse ${l.verse_no}`,
+        text: l.lesson,
+        onSave: () => handleSaveEdit(l.chapter_no, l.verse_no),
+        original: l
+      })) : [])
+    : (selectedTheme && selectedSubtheme ? themeLessons.filter(t => t.theme === selectedTheme && t.subtheme === selectedSubtheme).sort((a,b) => a.serial - b.serial).map(t => ({
+        key: `theme-${t.serial}`,
+        badge: `Verse ${t.serial}`,
+        text: t.verse,
+        onSave: () => handleSaveThemeEdit(t.serial),
+        original: t
+      })) : []);
+
+  const title = viewMode === 'chapters' 
+    ? (selectedChapter ? (SURAH_NAMES[selectedChapter - 1] || `Chapter ${selectedChapter}`) : '')
+    : (selectedSubtheme || '');
+
+  const subtitle = viewMode === 'chapters'
+    ? (selectedChapter ? `Chapter ${selectedChapter}` : '')
+    : (selectedTheme || '');
 
   return (
     <div className="min-h-screen flex flex-col md:flex-row p-4 md:p-8 gap-8 max-w-[1600px] mx-auto">
@@ -246,38 +402,97 @@ export default function App() {
           {error && <p className="text-red-500 text-sm mt-4 bg-red-50 p-3 rounded-xl w-full">{error}</p>}
         </div>
 
-        {/* Chapters List */}
+        {/* Sidebar Navigation */}
         <div className="bg-white rounded-[2.5rem] shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-[#F0EBE1] flex-1 overflow-hidden flex flex-col max-h-[60vh] md:max-h-none">
-          <div className="p-6 border-b border-slate-100 bg-white z-10">
-            <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
-              <Sparkles size={20} className="text-amber-400" />
-              Chapters
-            </h2>
+          <div className="p-4 border-b border-slate-100 bg-white z-10">
+            <div className="flex bg-slate-100 p-1 rounded-2xl">
+              <button
+                onClick={() => setViewMode('chapters')}
+                className={`flex-1 py-2.5 rounded-xl font-bold text-sm transition-all flex items-center justify-center gap-2 ${viewMode === 'chapters' ? 'bg-white text-sky-500 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+              >
+                <Sparkles size={16} />
+                Chapters
+              </button>
+              <button
+                onClick={() => setViewMode('themes')}
+                className={`flex-1 py-2.5 rounded-xl font-bold text-sm transition-all flex items-center justify-center gap-2 ${viewMode === 'themes' ? 'bg-white text-sky-500 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+              >
+                <Layers size={16} />
+                Themes
+              </button>
+            </div>
           </div>
-          <div className="overflow-y-auto flex-1 p-4 flex flex-col gap-2">
+          <div className="overflow-y-auto flex-1 p-4 flex flex-col gap-2 custom-scrollbar">
             {loading ? (
               <div className="text-center p-4 text-slate-400 font-medium animate-pulse">Loading...</div>
-            ) : chapters.length === 0 ? (
-              <div className="text-center p-4 text-slate-400 font-medium">No chapters yet. Upload a CSV!</div>
+            ) : viewMode === 'chapters' ? (
+              chapters.length === 0 ? (
+                <div className="text-center p-4 text-slate-400 font-medium">No chapters yet. Upload a CSV!</div>
+              ) : (
+                chapters.map(chapter => (
+                  <button
+                    key={chapter}
+                    onClick={() => setSelectedChapter(chapter)}
+                    className={`w-full text-left px-6 py-4 rounded-2xl font-bold transition-all duration-300 flex items-center justify-between group ${
+                      selectedChapter === chapter 
+                        ? 'bg-sky-500 text-white shadow-md shadow-sky-200 scale-[1.02]' 
+                        : 'bg-transparent text-slate-600 hover:bg-slate-50 hover:scale-[1.01]'
+                    }`}
+                  >
+                    <span className="truncate pr-2">{SURAH_NAMES[chapter - 1] || `Chapter ${chapter}`}</span>
+                    <span className={`text-sm px-3 py-1 rounded-full transition-colors ${
+                      selectedChapter === chapter ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-400 group-hover:bg-slate-200'
+                    }`}>
+                      {chapter}
+                    </span>
+                  </button>
+                ))
+              )
             ) : (
-              chapters.map(chapter => (
-                <button
-                  key={chapter}
-                  onClick={() => setSelectedChapter(chapter)}
-                  className={`w-full text-left px-6 py-4 rounded-2xl font-bold transition-all duration-300 flex items-center justify-between group ${
-                    selectedChapter === chapter 
-                      ? 'bg-sky-500 text-white shadow-md shadow-sky-200 scale-[1.02]' 
-                      : 'bg-transparent text-slate-600 hover:bg-slate-50 hover:scale-[1.01]'
-                  }`}
-                >
-                  <span className="truncate pr-2">{SURAH_NAMES[chapter - 1] || `Chapter ${chapter}`}</span>
-                  <span className={`text-sm px-3 py-1 rounded-full transition-colors ${
-                    selectedChapter === chapter ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-400 group-hover:bg-slate-200'
-                  }`}>
-                    {chapter}
-                  </span>
-                </button>
-              ))
+              (Array.from(new Set(themeLessons.map(t => t.theme))) as string[]).map(theme => {
+                const isExpanded = expandedTheme === theme;
+                const subthemes = Array.from(new Set(themeLessons.filter(t => t.theme === theme).map(t => t.subtheme))) as string[];
+
+                return (
+                  <div key={theme} className="mb-1">
+                    <button 
+                      onClick={() => setExpandedTheme(isExpanded ? null : theme)} 
+                      className={`w-full flex justify-between items-center p-4 rounded-2xl font-bold transition-colors ${isExpanded ? 'bg-sky-50 text-sky-700' : 'bg-transparent text-slate-600 hover:bg-slate-50'}`}
+                    >
+                      <span className="truncate pr-2 text-left">{theme}</span>
+                      <ChevronDown className={`transition-transform flex-shrink-0 ${isExpanded ? 'rotate-180' : ''}`} size={18} />
+                    </button>
+                    <AnimatePresence>
+                      {isExpanded && (
+                        <motion.div 
+                          initial={{ height: 0, opacity: 0 }}
+                          animate={{ height: 'auto', opacity: 1 }}
+                          exit={{ height: 0, opacity: 0 }}
+                          className="overflow-hidden"
+                        >
+                          <div className="pl-3 pr-1 py-2 flex flex-col gap-1 border-l-2 border-sky-100 ml-6 mt-1 mb-2">
+                            {subthemes.map(subtheme => {
+                              const isSelected = selectedTheme === theme && selectedSubtheme === subtheme;
+                              return (
+                                <button
+                                  key={subtheme}
+                                  onClick={() => { setSelectedTheme(theme); setSelectedSubtheme(subtheme); }}
+                                  className={`text-left p-3 rounded-xl text-sm font-bold transition-all ${isSelected ? 'bg-sky-500 text-white shadow-md shadow-sky-200 translate-x-1' : 'text-slate-500 hover:bg-slate-50 hover:text-sky-600'}`}
+                                >
+                                  {subtheme}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                  </div>
+                );
+              })
+            )}
+            {viewMode === 'themes' && themeLessons.length === 0 && !loading && (
+              <div className="text-center p-4 text-slate-400 font-medium">No themes yet. Upload a CSV!</div>
             )}
           </div>
         </div>
@@ -285,9 +500,9 @@ export default function App() {
 
       {/* Main Content */}
       <main className="flex-1 flex flex-col min-w-0">
-        {selectedChapter ? (
+        {currentDisplayItems.length > 0 || (viewMode === 'chapters' ? selectedChapter : (selectedTheme && selectedSubtheme)) ? (
           <motion.div 
-            key={selectedChapter}
+            key={viewMode === 'chapters' ? `chapter-${selectedChapter}` : `theme-${selectedTheme}-${selectedSubtheme}`}
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             className="flex-1 flex flex-col"
@@ -296,14 +511,31 @@ export default function App() {
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-6 mb-8 bg-white p-6 md:p-8 rounded-[2.5rem] shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-[#F0EBE1]">
               <div>
                 <h2 className="text-4xl md:text-5xl font-bold text-slate-800 tracking-tight">
-                  {SURAH_NAMES[selectedChapter - 1] || `Chapter ${selectedChapter}`}
+                  {title}
                 </h2>
                 <p className="text-sky-500 font-semibold text-lg mt-2 flex items-center gap-2">
-                  <Cloud size={20} /> Chapter {selectedChapter}
+                  <Cloud size={20} /> {subtitle}
                 </p>
               </div>
               
               <div className="flex flex-wrap gap-3 bg-slate-50 p-2 rounded-full border border-slate-100">
+                <div className="flex items-center gap-1 bg-white rounded-full px-2 shadow-sm border border-slate-100">
+                  <button 
+                    onClick={() => setTextSizeMultiplier(prev => Math.max(0.5, prev - 0.1))}
+                    className="p-2 text-slate-400 hover:text-sky-500 transition-colors"
+                    title="Decrease text size"
+                  >
+                    <ZoomOut size={18} />
+                  </button>
+                  <span className="text-xs font-bold text-slate-400 w-8 text-center">{Math.round(textSizeMultiplier * 100)}%</span>
+                  <button 
+                    onClick={() => setTextSizeMultiplier(prev => Math.min(2.5, prev + 0.1))}
+                    className="p-2 text-slate-400 hover:text-sky-500 transition-colors"
+                    title="Increase text size"
+                  >
+                    <ZoomIn size={18} />
+                  </button>
+                </div>
                 <button
                   onClick={() => setIsFlashcardMode(!isFlashcardMode)}
                   className={`px-6 py-3 rounded-full font-bold flex items-center gap-2 transition-all ${
@@ -319,7 +551,7 @@ export default function App() {
             </div>
 
             {/* Content */}
-            {isFlashcardMode && chapterLessons.length > 0 ? (
+            {isFlashcardMode && currentDisplayItems.length > 0 ? (
               <div className="flex-1 flex flex-col items-center justify-start pt-4 md:pt-8 max-w-5xl mx-auto w-full">
                 <AnimatePresence mode="wait">
                   <motion.div 
@@ -336,11 +568,11 @@ export default function App() {
                       <div className="absolute -bottom-20 -right-20 w-64 h-64 bg-indigo-100 rounded-full blur-3xl"></div>
                     </div>
 
-                    <span className="relative z-10 text-xl md:text-2xl font-bold text-sky-500 mb-8 bg-sky-50 px-6 py-2 rounded-full border border-sky-100 shadow-sm">
-                      Verse {chapterLessons[flashcardIndex].verse_no}
+                    <span className="relative z-10 font-bold text-sky-500 mb-8 bg-sky-50 px-6 py-2 rounded-full border border-sky-100 shadow-sm" style={{ fontSize: `${1.25 * textSizeMultiplier}rem` }}>
+                      {currentDisplayItems[flashcardIndex]?.badge}
                     </span>
-                    <p className="relative z-10 text-4xl md:text-6xl lg:text-7xl leading-tight font-bold text-slate-800 tracking-tight max-w-4xl">
-                      {chapterLessons[flashcardIndex].lesson}
+                    <p className="relative z-10 leading-tight font-bold text-slate-800 tracking-tight max-w-4xl" style={{ fontSize: `${3.5 * textSizeMultiplier}rem` }}>
+                      {currentDisplayItems[flashcardIndex]?.text}
                     </p>
                   </motion.div>
                 </AnimatePresence>
@@ -367,9 +599,9 @@ export default function App() {
                   </button>
                   
                   <button 
-                    onClick={() => setFlashcardIndex(Math.min(chapterLessons.length - 1, flashcardIndex + 1))}
-                    disabled={flashcardIndex === chapterLessons.length - 1}
-                    className={`p-4 rounded-full transition-colors ${flashcardIndex === chapterLessons.length - 1 ? 'opacity-30 cursor-not-allowed' : 'text-slate-500 hover:bg-slate-50 hover:text-sky-500'}`}
+                    onClick={() => setFlashcardIndex(Math.min(currentDisplayItems.length - 1, flashcardIndex + 1))}
+                    disabled={flashcardIndex === currentDisplayItems.length - 1}
+                    className={`p-4 rounded-full transition-colors ${flashcardIndex === currentDisplayItems.length - 1 ? 'opacity-30 cursor-not-allowed' : 'text-slate-500 hover:bg-slate-50 hover:text-sky-500'}`}
                   >
                     <ChevronRight size={28} strokeWidth={2.5} />
                   </button>
@@ -394,27 +626,27 @@ export default function App() {
               </div>
             ) : (
               <div className="grid grid-cols-1 gap-6 pb-12">
-                {chapterLessons.map((lesson, idx) => {
-                  const isEditing = editingVerseKey === `${lesson.chapter_no}-${lesson.verse_no}`;
+                {currentDisplayItems.map((item, idx) => {
+                  const isEditing = editingVerseKey === item.key;
 
                   return (
                     <motion.div 
                       initial={{ opacity: 0, y: 20 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: Math.min(idx * 0.05, 0.5) }}
-                      key={lesson.verse_no} 
+                      key={item.key} 
                       className="bg-white rounded-[2rem] p-6 md:p-8 shadow-[0_4px_20px_rgb(0,0,0,0.03)] border border-[#F0EBE1] hover:border-sky-200 hover:shadow-md transition-all duration-300"
                     >
                       <div className="flex justify-between items-start mb-6 gap-4">
                         <div className="px-5 py-2 rounded-full text-sm font-bold shadow-sm bg-sky-50 text-sky-600">
-                          Verse {lesson.verse_no}
+                          {item.badge}
                         </div>
                         <div className="flex items-center gap-2">
                           {!isEditing && (
                             <button 
                               onClick={() => {
-                                setEditingVerseKey(`${lesson.chapter_no}-${lesson.verse_no}`);
-                                setEditValue(lesson.lesson);
+                                setEditingVerseKey(item.key);
+                                setEditValue(item.text);
                               }}
                               className="p-3 rounded-full text-slate-400 hover:bg-slate-50 hover:text-sky-500 transition-colors"
                               title="Edit Lesson"
@@ -443,7 +675,7 @@ export default function App() {
                               <X size={20} /> Cancel
                             </button>
                             <button 
-                              onClick={() => handleSaveEdit(lesson.chapter_no, lesson.verse_no)}
+                              onClick={() => item.onSave()}
                               className="px-6 py-3 font-bold flex items-center gap-2 bg-indigo-500 text-white rounded-full hover:bg-indigo-600 shadow-md shadow-indigo-200"
                               disabled={savingEdit}
                             >
@@ -452,8 +684,8 @@ export default function App() {
                           </div>
                         </div>
                       ) : (
-                        <p className="text-2xl md:text-3xl font-semibold leading-relaxed text-slate-700">
-                          {lesson.lesson}
+                        <p className="font-semibold leading-relaxed text-slate-700" style={{ fontSize: `${1.75 * textSizeMultiplier}rem` }}>
+                          {item.text}
                         </p>
                       )}
                     </motion.div>
@@ -467,8 +699,8 @@ export default function App() {
             <div className="w-32 h-32 bg-sky-50 rounded-full flex items-center justify-center mb-6 shadow-inner">
               <Sparkles size={48} className="text-sky-300" />
             </div>
-            <h2 className="text-3xl font-bold text-slate-400 mb-2">Select a Chapter</h2>
-            <p className="text-slate-400 font-medium">Choose a chapter from the sidebar to begin.</p>
+            <h2 className="text-3xl font-bold text-slate-400 mb-2">Select a {viewMode === 'chapters' ? 'Chapter' : 'Theme'}</h2>
+            <p className="text-slate-400 font-medium">Choose a {viewMode === 'chapters' ? 'chapter' : 'theme'} from the sidebar to begin.</p>
           </div>
         )}
       </main>
